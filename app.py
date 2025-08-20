@@ -82,23 +82,23 @@ def analyze_issues(df, date_col, issue_col):
 # 3. Streamlit UI
 # ----------------------------
 st.set_page_config(page_title="AI Quarterly Issue Analyzer", layout="wide")
-st.title("📊 AI-Powered Quarterly Issue Analyzer")
+st.title("AI-Powered Quarterly Issue Analyzer")
 st.markdown("Upload your **Excel file** with a datetime column and get an **AI-driven quarterly summary** of common issues.")
 
-uploaded_file = st.file_uploader("📂 Upload Excel file", type=["xlsx"])
+uploaded_file = st.file_uploader("Upload Excel file", type=["xlsx"])
 
 if uploaded_file:
     # Load Excel
     df = pd.read_excel(uploaded_file)
-    st.subheader("📄 Uploaded Data Preview")
+    st.subheader("Uploaded Data Preview")
     st.dataframe(df.head(), use_container_width=True)
 
     # Let the user select datetime and issue columns
-    st.markdown("### 🔹 Select Columns")
+    st.markdown("### Select Columns")
     date_col = st.selectbox("Select Date Column", df.columns)
     issue_col = st.selectbox("Select Issue Column", df.columns)
 
-    if st.button("🚀 Analyze Issues"):
+    if st.button("Analyze Issues"):
         with st.spinner("Analyzing issues using AI... ⏳"):
             result_df = analyze_issues(df, date_col, issue_col)
 
@@ -111,7 +111,7 @@ if uploaded_file:
         result_df.to_excel(output, index=False)
         output.seek(0)
         st.download_button(
-            label="📥 Download Cleaned Summary Excel",
+            label="Download Cleaned Summary Excel",
             data=output,
             file_name="quarterly_issue_summary_ai.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
