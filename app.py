@@ -40,12 +40,12 @@ def get_quarter_month(month):
         return 'Q4', 'Oct-Nov-Dec'
 
 # ------------------------------------
-# Main Analysis Function
+# BERTopic Analysis
 # ------------------------------------
 def analyze_tickets_bertopic(df, date_col, subject_col):
-    # Rename columns for consistency
+    # Rename columns
     df = df.rename(columns={date_col: 'DateTime', subject_col: 'Subject'})
-    
+
     # Convert Date column
     df['DateTime'] = pd.to_datetime(df['DateTime'], dayfirst=True, errors='coerce')
     df = df.dropna(subset=['DateTime'])
@@ -53,19 +53,19 @@ def analyze_tickets_bertopic(df, date_col, subject_col):
     # Preprocess text
     df['CleanSubject'] = df['Subject'].apply(preprocess_text)
 
-    # Extract time-related info
+    # Extract time details
     df['Year'] = df['DateTime'].dt.year
     df['Month'] = df['DateTime'].dt.month
     df[['Quarter', 'Period']] = df.apply(lambda r: pd.Series(get_quarter_month(r['Month'])), axis=1)
     df['QuarterYear'] = df['Quarter'] + ' ' + df['Year'].astype(str)
 
-    # BERTopic model
+    # BERTopic modeling
     vectorizer_model = CountVectorizer(stop_words='english')
     topic_model = BERTopic(vectorizer_model=vectorizer_model, language="english")
     topics, probs = topic_model.fit_transform(df['CleanSubject'])
     df['Topic'] = topics
 
-    # Convert topic numbers to readable names
+    # Convert topic numbers to human-readable names
     def topic_to_name(topic, top_n=5):
         if topic == -1:
             return "Other / Miscellaneous"
@@ -89,7 +89,7 @@ def analyze_tickets_bertopic(df, date_col, subject_col):
         })
     summary_df = pd.DataFrame(summary)
 
-    # Ensure missing combinations are filled with 0 tickets
+    # Fill missing topic combinations with zero counts
     years = df['Year'].unique()
     quarter_order = ['Q1', 'Q2', 'Q3', 'Q4']
     periods_map = {
@@ -119,9 +119,36 @@ def analyze_tickets_bertopic(df, date_col, subject_col):
     return merged, topic_model, df
 
 # ------------------------------------
+# Summarize Quarterly Issues (using actual subjects)
+# ------------------------------------
+def summarize_quarterly_tickets(df):
+    summarized = []
+
+    grouped = df.groupby(['QuarterYear', 'Period'])
+
+    for (quarter, period), group in grouped:
+        total_tickets = group.shape[0]
+
+        # Most frequent actual ticket subjects
+        top_issues_counts = group['Subject'].value_counts().head(3)
+        most_frequent_issue = top_issues_counts.index[0] if not top_issues_counts.empty else "N/A"
+        common_issues = '; '.join(top_issues_counts.index.tolist())
+
+        summarized.append({
+            'Quarter': quarter,
+            'Period': period,
+            'Total Tickets': total_tickets,
+            'Most Frequent Issue': most_frequent_issue,
+            'Common Issues': common_issues
+        })
+
+    return pd.DataFrame(summarized)
+
+# ------------------------------------
 # Streamlit UI
 # ------------------------------------
-st.title("📊 Ticket Analysis with BERTopic NLP + UMAP Visualization")
+st.title("📊 Ticket Analysis with BERTopic NLP + Actual Issue Summarization")
+
 uploaded_file = st.file_uploader("📂 Upload Excel file", type=["xlsx"])
 
 if uploaded_file is not None:
@@ -134,21 +161,39 @@ if uploaded_file is not None:
         date_col = st.selectbox("📅 Select the Date/Time column", cols)
         subject_col = st.selectbox("📝 Select the Issue Header column", cols)
 
-        if st.button("🚀 Analyze Tickets with BERTopic"):
+        if st.button("🚀 Analyze Tickets"):
             with st.spinner("🔄 Analyzing topics..."):
                 summary_df, model, result_df = analyze_tickets_bertopic(df, date_col, subject_col)
 
-                st.subheader("📊 Quarterly Topic Summary")
+                # Detailed BERTopic summary
+                st.subheader("📊 Detailed Quarterly Topic Summary")
                 st.dataframe(summary_df)
 
-                # Downloadable Excel summary
+                # Download detailed BERTopic summary
                 towrite = io.BytesIO()
                 summary_df.to_excel(towrite, index=False, engine='openpyxl')
                 towrite.seek(0)
                 st.download_button(
-                    label="📥 Download Excel Summary",
+                    label="📥 Download Detailed Topic Summary",
                     data=towrite,
                     file_name="ticket_summary_bertopic.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                )
+
+                # Summarized quarterly issues based on actual subjects
+                final_summary_df = summarize_quarterly_tickets(result_df)
+
+                st.subheader("📌 Quarterly Summary (Actual Issues)")
+                st.dataframe(final_summary_df)
+
+                # Download summarized Excel
+                towrite2 = io.BytesIO()
+                final_summary_df.to_excel(towrite2, index=False, engine='openpyxl')
+                towrite2.seek(0)
+                st.download_button(
+                    label="📥 Download Quarterly Issue Summary",
+                    data=towrite2,
+                    file_name="quarterly_summary.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                 )
 
