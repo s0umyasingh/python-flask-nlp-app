@@ -95,22 +95,22 @@ def summarize_quarterly_tickets(df):
 # ------------------------------------
 # Streamlit UI
 # ------------------------------------
-st.title("📌 Quarterly Ticket Summary (Actual Issues)")
+st.title("Quarterly Ticket Summary (Actual Issues)")
 
-uploaded_file = st.file_uploader("📂 Upload Excel file", type=["xlsx"])
+uploaded_file = st.file_uploader("Upload Excel file", type=["xlsx"])
 
 if uploaded_file is not None:
     try:
         df = pd.read_excel(uploaded_file)
-        st.subheader("📄 Preview of Uploaded Data")
+        st.subheader("Preview of Uploaded Data")
         st.dataframe(df.head())
 
         cols = df.columns.tolist()
-        date_col = st.selectbox("📅 Select the Date/Time column", cols)
-        subject_col = st.selectbox("📝 Select the Issue Header column", cols)
+        date_col = st.selectbox("Select the Date/Time column", cols)
+        subject_col = st.selectbox("Select the Issue Header column", cols)
 
-        if st.button("🚀 Generate Quarterly Summary"):
-            with st.spinner("🔄 Processing tickets..."):
+        if st.button("Generate Quarterly Summary"):
+            with st.spinner("Processing tickets..."):
                 # Preprocess + Quarter extraction
                 result_df = analyze_tickets_bertopic(df, date_col, subject_col)
 
@@ -118,7 +118,7 @@ if uploaded_file is not None:
                 final_summary_df = summarize_quarterly_tickets(result_df)
 
                 # Display summarized quarterly issues
-                st.subheader("📌 Quarterly Summary (Actual Issues)")
+                st.subheader("Quarterly Summary (Actual Issues)")
                 st.dataframe(final_summary_df)
 
                 # Download summarized Excel
@@ -126,7 +126,7 @@ if uploaded_file is not None:
                 final_summary_df.to_excel(towrite, index=False, engine='openpyxl')
                 towrite.seek(0)
                 st.download_button(
-                    label="📥 Download Quarterly Summary",
+                    label="Download Quarterly Summary",
                     data=towrite,
                     file_name="quarterly_summary.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
