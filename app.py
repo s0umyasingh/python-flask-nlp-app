@@ -95,7 +95,7 @@ def summarize_quarterly_tickets(df):
 # ------------------------------------
 # Streamlit UI
 # ------------------------------------
-st.title("Quarterly Ticket Summary (Actual Issues)")
+st.title("Quarterly Ticket Summary")
 
 uploaded_file = st.file_uploader("Upload Excel file", type=["xlsx"])
 
