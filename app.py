@@ -1,118 +1,176 @@
-import pandas as pd
-import nltk
-import io
-from nltk.corpus import stopwords
-from sentence_transformers import SentenceTransformer
-import hdbscan
-from collections import Counter
 import streamlit as st
+import pandas as pd
+import numpy as np
+import io
+import string
+import nltk
+from nltk.corpus import stopwords
+from bertopic import BERTopic
+from sklearn.feature_extraction.text import CountVectorizer
+import plotly.express as px
 
 # ----------------------------
-# 1. Setup
+# Download stopwords
 # ----------------------------
-nltk.download("stopwords")
-STOPWORDS = set(stopwords.words("english"))
+nltk.download('stopwords')
+stop_words = set(stopwords.words('english'))
 
-@st.cache_resource
-def load_model():
-    return SentenceTransformer("all-MiniLM-L6-v2")
+# ------------------------------------
+# Text Preprocessing
+# ------------------------------------
+def preprocess_text(text):
+    if pd.isna(text):
+        return ""
+    text = text.lower()
+    text = text.translate(str.maketrans('', '', string.punctuation))
+    tokens = [w for w in text.split() if w not in stop_words]
+    return ' '.join(tokens)
 
-model = load_model()
+# ------------------------------------
+# Month to Quarter Conversion
+# ------------------------------------
+def get_quarter_month(month):
+    if month in [1, 2, 3]:
+        return 'Q1', 'Jan-Feb-Mar'
+    elif month in [4, 5, 6]:
+        return 'Q2', 'Apr-May-Jun'
+    elif month in [7, 8, 9]:
+        return 'Q3', 'Jul-Aug-Sep'
+    else:
+        return 'Q4', 'Oct-Nov-Dec'
 
-# ----------------------------
-# 2. Utility Functions
-# ----------------------------
-def clean_text(text):
-    words = [w for w in str(text).lower().split() if w not in STOPWORDS]
-    return " ".join(words)
+# ------------------------------------
+# Main Analysis Function
+# ------------------------------------
+def analyze_tickets_bertopic(df, date_col, subject_col):
+    # Rename columns for consistency
+    df = df.rename(columns={date_col: 'DateTime', subject_col: 'Subject'})
+    
+    # Convert Date column
+    df['DateTime'] = pd.to_datetime(df['DateTime'], dayfirst=True, errors='coerce')
+    df = df.dropna(subset=['DateTime'])
 
-def extract_quarter(df, date_col):
-    df[date_col] = pd.to_datetime(df[date_col], errors="coerce")
-    df = df.dropna(subset=[date_col])
-    df["quarter"] = df[date_col].dt.to_period("Q").astype(str)
-    return df
+    # Preprocess text
+    df['CleanSubject'] = df['Subject'].apply(preprocess_text)
 
-def analyze_issues(df, date_col, issue_col):
-    # Create quarter column from datetime
-    df = extract_quarter(df, date_col)
+    # Extract time-related info
+    df['Year'] = df['DateTime'].dt.year
+    df['Month'] = df['DateTime'].dt.month
+    df[['Quarter', 'Period']] = df.apply(lambda r: pd.Series(get_quarter_month(r['Month'])), axis=1)
+    df['QuarterYear'] = df['Quarter'] + ' ' + df['Year'].astype(str)
 
-    # Drop rows where issues are missing
-    df = df.dropna(subset=[issue_col])
+    # BERTopic model
+    vectorizer_model = CountVectorizer(stop_words='english')
+    topic_model = BERTopic(vectorizer_model=vectorizer_model, language="english")
+    topics, probs = topic_model.fit_transform(df['CleanSubject'])
+    df['Topic'] = topics
 
-    # Clean issue texts
-    df["clean_issue"] = df[issue_col].apply(clean_text)
+    # Convert topic numbers to readable names
+    def topic_to_name(topic, top_n=5):
+        if topic == -1:
+            return "Other / Miscellaneous"
+        words = topic_model.get_topic(topic)
+        if words:
+            return ', '.join([w[0] for w in words[:top_n]])
+        else:
+            return "Other / Miscellaneous"
 
-    # Generate embeddings
-    embeddings = model.encode(df["clean_issue"].tolist(), show_progress_bar=False)
+    df['TopicName'] = df['Topic'].apply(lambda t: topic_to_name(t, top_n=5))
 
-    # Cluster similar issues using HDBSCAN
-    clusterer = hdbscan.HDBSCAN(
-        min_cluster_size=2,
-        metric="euclidean",
-        cluster_selection_method="eom"
-    )
-    df["cluster"] = clusterer.fit_predict(embeddings)
-    df["cluster"] = df["cluster"].apply(lambda x: -1 if x == -1 else x)
-
-    # Get representative issue per cluster
-    def get_representative_issue(cluster_df):
-        return Counter(cluster_df[issue_col]).most_common(1)[0][0]
-
-    cluster_labels = df[df["cluster"] != -1].groupby("cluster").apply(get_representative_issue)
-    df["cluster_label"] = df["cluster"].map(cluster_labels).fillna(df[issue_col])
-
-    # Summarize issues per quarter
-    summary = df.groupby(["quarter", "cluster_label"]).size().reset_index(name="Count")
-
-    def summarize_issues(group):
-        sorted_group = group.sort_values("Count", ascending=False)
-        common_issues = ", ".join(f"{row['cluster_label']}({row['Count']})" for _, row in sorted_group.iterrows())
-        top_issues = ", ".join(sorted_group.head(2)["cluster_label"])
-        total_count = sorted_group["Count"].sum()
-        return pd.Series({
-            "frequency": total_count,
-            "common issue": common_issues,
-            "common frequent issue": top_issues
+    # Group by Quarter + Topic
+    grouped = df.groupby(['QuarterYear', 'Period', 'TopicName'])
+    summary = []
+    for (qyear, period, topic_name), group in grouped:
+        summary.append({
+            'Quarter': qyear,
+            'Period': period,
+            'Topic': topic_name,
+            'No. of Tickets': group.shape[0]
         })
+    summary_df = pd.DataFrame(summary)
 
-    summary_df = summary.groupby("quarter").apply(summarize_issues).reset_index()
-    return summary_df
+    # Ensure missing combinations are filled with 0 tickets
+    years = df['Year'].unique()
+    quarter_order = ['Q1', 'Q2', 'Q3', 'Q4']
+    periods_map = {
+        'Q1': 'Jan-Feb-Mar',
+        'Q2': 'Apr-May-Jun',
+        'Q3': 'Jul-Aug-Sep',
+        'Q4': 'Oct-Nov-Dec'
+    }
 
-# ----------------------------
-# 3. Streamlit UI
-# ----------------------------
-st.set_page_config(page_title="AI Quarterly Issue Analyzer", layout="wide")
-st.title("AI-Powered Quarterly Issue Analyzer")
-st.markdown("Upload your **Excel file** with a datetime column and get an **AI-driven quarterly summary** of common issues.")
+    all_rows = []
+    for year in sorted(years):
+        for q in quarter_order:
+            period_name = periods_map[q]
+            for topic in summary_df['Topic'].unique():
+                all_rows.append({'Quarter': f"{q} {year}", 'Period': period_name, 'Topic': topic})
 
-uploaded_file = st.file_uploader("Upload Excel file", type=["xlsx"])
+    all_df = pd.DataFrame(all_rows)
+    merged = pd.merge(all_df, summary_df, on=['Quarter', 'Period', 'Topic'], how='left')
+    merged['No. of Tickets'] = merged['No. of Tickets'].fillna(0).astype(int)
 
-if uploaded_file:
-    # Load Excel
-    df = pd.read_excel(uploaded_file)
-    st.subheader("Uploaded Data Preview")
-    st.dataframe(df.head(), use_container_width=True)
+    # Sort properly
+    merged['Year'] = merged['Quarter'].str.split().str[1].astype(int)
+    merged['Qnum'] = merged['Quarter'].str.split().str[0].apply(lambda x: quarter_order.index(x) + 1)
+    merged = merged.sort_values(by=['Year', 'Qnum', 'Topic']).reset_index(drop=True)
+    merged.drop(columns=['Year', 'Qnum'], inplace=True)
 
-    # Let the user select datetime and issue columns
-    st.markdown("### Select Columns")
-    date_col = st.selectbox("Select Date Column", df.columns)
-    issue_col = st.selectbox("Select Issue Column", df.columns)
+    return merged, topic_model, df
 
-    if st.button("Analyze Issues"):
-        with st.spinner("Analyzing issues using AI... ⏳"):
-            result_df = analyze_issues(df, date_col, issue_col)
+# ------------------------------------
+# Streamlit UI
+# ------------------------------------
+st.title("📊 Ticket Analysis with BERTopic NLP + UMAP Visualization")
+uploaded_file = st.file_uploader("📂 Upload Excel file", type=["xlsx"])
 
-        st.success("✅ Analysis complete!")
-        st.subheader("📌 AI-Generated Quarterly Summary")
-        st.dataframe(result_df, use_container_width=True)
+if uploaded_file is not None:
+    try:
+        df = pd.read_excel(uploaded_file)
+        st.subheader("📄 Preview of Uploaded Data")
+        st.dataframe(df.head())
 
-        # Download analyzed Excel
-        output = io.BytesIO()
-        result_df.to_excel(output, index=False)
-        output.seek(0)
-        st.download_button(
-            label="Download Cleaned Summary Excel",
-            data=output,
-            file_name="quarterly_issue_summary_ai.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        )
+        cols = df.columns.tolist()
+        date_col = st.selectbox("📅 Select the Date/Time column", cols)
+        subject_col = st.selectbox("📝 Select the Issue Header column", cols)
+
+        if st.button("🚀 Analyze Tickets with BERTopic"):
+            with st.spinner("🔄 Analyzing topics..."):
+                summary_df, model, result_df = analyze_tickets_bertopic(df, date_col, subject_col)
+
+                st.subheader("📊 Quarterly Topic Summary")
+                st.dataframe(summary_df)
+
+                # Downloadable Excel summary
+                towrite = io.BytesIO()
+                summary_df.to_excel(towrite, index=False, engine='openpyxl')
+                towrite.seek(0)
+                st.download_button(
+                    label="📥 Download Excel Summary",
+                    data=towrite,
+                    file_name="ticket_summary_bertopic.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                )
+
+                # Top Topics & Keywords
+                st.markdown("---")
+                st.subheader("🔑 Top Topics and Their Keywords")
+                topic_info = model.get_topic_info().head(10)
+                for topic_num in topic_info['Topic']:
+                    if topic_num == -1:
+                        continue
+                    topic_words = model.get_topic(topic_num)
+                    word_list = ', '.join([f"{w[0]} ({w[1]:.2f})" for w in topic_words[:10]])
+                    st.markdown(f"**Topic {topic_num}:** {word_list}")
+
+                # UMAP Visualization
+                st.markdown("---")
+                st.subheader("🌐 UMAP Topic Visualization")
+                fig = model.visualize_topics()
+                st.plotly_chart(fig, use_container_width=True)
+
+    except Exception as e:
+        st.error(f"❌ An error occurred: {e}")
+
+else:
+    st.info("ℹ️ Please upload an Excel file to begin analysis.")
